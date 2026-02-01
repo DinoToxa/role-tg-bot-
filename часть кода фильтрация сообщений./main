@@ -1,0 +1,105 @@
+import telebot
+import re
+import time
+from telebot.types import ChatPermissions
+
+TOKEN = "token"
+bot = telebot.TeleBot(TOKEN)
+
+# Простой список плохих слов
+BAD_WORD_ROOTS = [
+    # Корни-анатомизмы
+    'ху[ийеёяю]', 'пизд', 'еб[аоёлн]', 'бля[дт]',
+    # Распространённые производные
+    'хер', 'муд[ёеоа]', 'манда', 'г[оа]ндон', 'залуп',
+    # Жесткие оскорбления по группам (примеры)
+    'у[ёо]бл', 'д[её]б[иі]л', 'д[ао]ун', 'кр[её]тин', 'пр[ие]д[ао]к',
+    'св[ао]л[ао]ч', 'ск[ао]т[ие]н', 'гнид', 'в[ыі]род[ао]к'
+]
+
+# СПИСОК ПОЛНЫХ СЛОВ (для точного совпадения)
+FULL_BAD_WORDS = [
+    'хуйло', 'пидор', 'пидорас', 'педик', 'гомик', 'нигер', 'ниггер',
+    'г[ао]вн', 'дерьм', 'шлюх', 'пр[ао]ст[ие]т', 'чм[ао]', 'ж[ие]рд',
+    'болван', 'скотина', 'тварь', 'идиот', 'дурак', 'кретин', 'дебил', 'даун', 'ублюдок'
+]
+
+# Компилируем регулярные выражения
+roots_pattern = re.compile('|'.join(BAD_WORD_ROOTS), re.I)
+full_words_pattern = re.compile(r'\b(' + '|'.join(FULL_BAD_WORDS) + r')\b', re.I)
+
+def contains_bad_words(text):
+    """Проверяет текст на наличие мата по корням и полным словам."""
+    if not text:
+        return False
+    if roots_pattern.search(text):
+        return True
+    if full_words_pattern.search(text):
+        return True
+    return False
+
+@bot.message_handler(func=lambda message: True)
+def check_message(message):
+    # Проверяем сообщение на маты
+    text = message.text if message.text else ""
+    
+    if contains_bad_words(text):
+        try:
+            # 1. Всегда удаляем сообщение (работает в любом чате)
+            bot.delete_message(message.chat.id, message.message_id)
+            
+            # 2. Пытаемся выдать мут ТОЛЬКО в супергруппах
+            chat_type = message.chat.type
+            
+            if chat_type in ['group', 'supergroup']:
+                try:
+                    # Проверяем, супергруппа ли это
+                    chat_info = bot.get_chat(message.chat.id)
+                    
+                    # Если чат - супергруппа, выдаем мут
+                    if hasattr(chat_info, 'is_forum') or chat_info.type == 'supergroup':
+                        bot.restrict_chat_member(
+                            message.chat.id,
+                            message.from_user.id,
+                            until_date=int(time.time()) + 600,  # 10 минут
+                            permissions=ChatPermissions(
+                                can_send_messages=False,
+                                can_send_media_messages=False,
+                                can_send_other_messages=False,
+                                can_add_web_page_previews=False
+                            )
+                        )
+                        warning_text = f"🔇 @{message.from_user.username or message.from_user.id} получил мут на 10 минут!"
+                        bot.send_message(message.chat.id, warning_text)
+                    else:
+                        # Обычная группа - только удаляем сообщение
+                        warning_text = f"⚠️ @{message.from_user.username or message.from_user.id}, ваше сообщение удалено за нарушение правил!"
+                        bot.send_message(message.chat.id, warning_text)
+                        
+                except Exception as e:
+                    # Если не супергруппа или нет прав
+                    warning_text = f"⚠️ @{message.from_user.username or message.from_user.id}, ваше сообщение удалено!"
+                    bot.send_message(message.chat.id, warning_text)
+            else:
+                # Личный чат или канал
+                warning_text = "⚠️ Ваше сообщение содержит запрещенные слова!"
+                bot.send_message(message.chat.id, warning_text)
+                
+        except Exception as e:
+            # Логируем ошибку в консоль
+            print(f"Ошибка при обработке сообщения: {e}")
+            
+            # Пытаемся отправить сообщение об ошибке
+            try:
+                if "message to delete not found" in str(e):
+                    bot.send_message(message.chat.id, "⚠️ Не удалось удалить сообщение (уже удалено?)")
+                elif "CHAT_ADMIN_REQUIRED" in str(e):
+                    bot.send_message(message.chat.id, "⚠️ У бота нет прав администратора!")
+                else:
+                    bot.send_message(message.chat.id, f"⚠️ Ошибка: {str(e)[:100]}")
+            except:
+                pass  # Если и это не получилось - просто игнорируем
+
+if __name__ == '__main__':
+    print("Бот запущен. Ожидание сообщений...")
+    bot.polling(none_stop=True, interval=0)
