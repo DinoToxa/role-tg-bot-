@@ -1,0 +1,46 @@
+import telebot
+from telebot.types import ChatPermissions
+
+TOKEN = 'ТОКЕН'
+bot = telebot.TeleBot(TOKEN)
+user_db = {}
+
+@bot.message_handler(func=lambda m: True, content_types=['text'])
+def handle_all(message):
+    if message.from_user.username:
+        user_db[message.from_user.username.lower()] = message.from_user.id
+    
+    if message.text.startswith('/setrole'):
+        parts = message.text.split()
+        if len(parts) < 3:
+            return bot.reply_to(message, "Используй: /setrole @username role")
+
+        username = parts[1].replace('@', '').lower()
+        role = parts[2].lower()
+        target_id = user_db.get(username)
+
+        if not target_id:
+            return bot.reply_to(message, f"сообщений от {username} небыло. Пусть он что-то напишет!")
+
+        try:
+            if role == 'admin':
+                bot.promote_chat_member(message.chat.id, target_id, 
+                    can_manage_chat=True, can_delete_messages=True, can_restrict_members=True)
+                bot.set_chat_administrator_custom_title(message.chat.id, target_id, "Админ")
+                bot.reply_to(message, f"⚡️ @{username} теперь Admin!")
+
+            elif role == 'mute':
+                bot.restrict_chat_member(message.chat.id, target_id, 
+                    permissions=ChatPermissions(can_send_messages=False))
+                bot.reply_to(message, f"🔇 @{username} в муте.")
+
+            elif role == 'member':
+                bot.promote_chat_member(message.chat.id, target_id, can_manage_chat=False)
+                bot.restrict_chat_member(message.chat.id, target_id, 
+                    permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True))
+                bot.reply_to(message, f"✅ @{username} участник.")
+
+        except Exception as e:
+            bot.reply_to(message, f"Ошибка: {e}. Убедись, что бот — админ с правом назначать других!")
+
+bot.polling()
