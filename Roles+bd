@@ -1,0 +1,100 @@
+import telebot
+from telebot.types import ChatPermissions
+import sqlite3
+
+TOKEN = '8341891718:AAHd458IwGuyv_crNt7R2eHdazOR0z1B5_k'
+bot = telebot.TeleBot(TOKEN)
+
+conn = sqlite3.connect('users.db', check_same_thread=False)
+conn.execute('CREATE TABLE IF NOT EXISTS user_roles (username TEXT PRIMARY KEY, user_id INTEGER, role TEXT)')
+conn.commit()
+
+@bot.message_handler(commands=['help'])
+def help_cmd(message):
+    bot.send_message(message.chat.id, """Привет, я умею назначать роли!
+                     У меня есть такие команды
+                     /setrole @username role (назначить роль)
+                     
+                     роли:
+                     admin - админ группы
+                     member - участник
+                     mute - нельзя писать
+                     мне ОБЯЗАТЕЛЬНО нужна роль администратора и право назначать других""")
+
+@bot.message_handler(commands=['get_user'])
+def get_user_cmd(m):
+    args = m.text.split()
+    if len(args) > 1:
+        username = args[1] if args[1].startswith('@') else '@' + args[1]
+        result = conn.execute('SELECT role FROM user_roles WHERE username=?', (username,)).fetchone()
+        bot.reply_to(m, f'{username}: {result[0] if result else "не найден"}')
+    else:
+        bot.reply_to(m, 'Использование: /get_user @username')
+
+@bot.message_handler(commands=['get_roles'])
+def get_roles_cmd(m):
+    args = m.text.split()
+    if len(args) > 1 and args[1] in ['admin','member','mute']:
+        users = conn.execute('SELECT username FROM user_roles WHERE role=?', (args[1],)).fetchall()
+        if users:
+            response = f"{args[1]}:\n" + '\n'.join(u[0] for u in users)
+        else:
+            response = 'Нет пользователей'
+        bot.reply_to(m, response)
+    else:
+        bot.reply_to(m, 'Использование: /get_roles <admin|member|mute>')
+
+@bot.message_handler(func=lambda m: True, content_types=['text'])
+def handle_all(message):
+    if message.from_user.username:
+        username = f"@{message.from_user.username.lower()}"
+        conn.execute('INSERT OR REPLACE INTO user_roles (username, user_id, role) VALUES (?, ?, COALESCE((SELECT role FROM user_roles WHERE username=?), "member"))',
+                    (username, message.from_user.id, username))
+        conn.commit()
+    
+    if message.text.startswith('/setrole'):
+        parts = message.text.split()
+        if len(parts) < 3:
+            return bot.reply_to(message, "Используй: /setrole @username role")
+
+        username_input = parts[1]
+        username = username_input if username_input.startswith('@') else '@' + username_input
+        role = parts[2].lower()
+        
+        result = conn.execute('SELECT user_id FROM user_roles WHERE username=?', (username,)).fetchone()
+        
+        if not result:
+            return bot.reply_to(message, f"Пользователь {username} не найден. Он должен написать хоть одно сообщение!")
+        
+        target_id = result[0]
+
+        try:
+            if role == 'admin':
+                bot.promote_chat_member(message.chat.id, target_id, 
+                    can_manage_chat=True, can_delete_messages=True, can_restrict_members=True)
+                bot.set_chat_administrator_custom_title(message.chat.id, target_id, "Админ")
+                bot.reply_to(message, f"⚡️ {username} теперь Admin!")
+                # Обновляем роль в БД
+                conn.execute('UPDATE user_roles SET role=? WHERE username=?', (role, username))
+
+            elif role == 'mute':
+                bot.restrict_chat_member(message.chat.id, target_id, 
+                    permissions=ChatPermissions(can_send_messages=False))
+                bot.reply_to(message, f"🔇 {username} в муте.")
+                # Обновляем роль в БД
+                conn.execute('UPDATE user_roles SET role=? WHERE username=?', (role, username))
+
+            elif role == 'member':
+                bot.promote_chat_member(message.chat.id, target_id, can_manage_chat=False)
+                bot.restrict_chat_member(message.chat.id, target_id, 
+                    permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True))
+                bot.reply_to(message, f"✅ {username} участник.")
+                # Обновляем роль в БД
+                conn.execute('UPDATE user_roles SET role=? WHERE username=?', (role, username))
+            
+            conn.commit()
+
+        except Exception as e:
+            bot.reply_to(message, f"Ошибка: {e}. Убедись, что бот — админ с правом назначать других!")
+
+bot.polling()
